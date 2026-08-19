@@ -1,5 +1,5 @@
 [Unit]
-Description=Iliya Avito messenger bot (ГК Добрые)
+Description=Iliya Avito messenger bot (Центр-Балкон)
 After=network-online.target
 Wants=network-online.target
 

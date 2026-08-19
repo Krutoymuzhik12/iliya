@@ -65,6 +65,9 @@ class AvitoBot:
     async def _say(self, chat_id: str, text: str) -> None:
         if not text:
             return
+        if not self.settings.poe_ready():
+            logger.warning("Avito send пропущен chat=%s: нет POE_API_KEY", chat_id)
+            return
         # Хэш до отправки: иначе параллельный поллинг примет своё сообщение за руки менеджера.
         self.db.remember_sent(chat_id, text)
         actual = await self.api.send(self._user_id, chat_id, text)

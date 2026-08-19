@@ -35,7 +35,8 @@ class DialogService:
         extra_hints: list[str] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         if not self.settings.poe_ready():
-            return FALLBACK, {"need_manager": False}
+            logger.warning("Poe не задан — ответ клиенту не генерируем")
+            return "", {"need_manager": False}
         try:
             reply, need_manager = await poe.generate_reply(
                 history,
