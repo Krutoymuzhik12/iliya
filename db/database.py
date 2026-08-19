@@ -18,6 +18,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "sent_hashes": [],
     "last_owner_ts": 0,
     "thinking": False,
+    "lead_sent": False,
 }
 
 

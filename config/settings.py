@@ -44,6 +44,8 @@ class AppSettings:
     followup_enabled: bool
     followup_delay_sec: float
     followup_poll_sec: float
+    tg_bot_token: str
+    tg_lead_chat_id: int
     db_path: Path
     log_path: Path
 
@@ -74,6 +76,8 @@ class AppSettings:
             followup_enabled=_bool_env("FOLLOWUP_ENABLED", "true"),
             followup_delay_sec=float(os.getenv("FOLLOWUP_DELAY_SEC", "14400")),
             followup_poll_sec=float(os.getenv("FOLLOWUP_POLL_SEC", "300")),
+            tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
+            tg_lead_chat_id=int(os.getenv("TG_LEAD_CHAT_ID", "0") or 0),
             db_path=DATA_DIR / "dialogs.db",
             log_path=DATA_DIR / "bot.log",
         )
@@ -83,6 +87,9 @@ class AppSettings:
 
     def poe_ready(self) -> bool:
         return bool(self.poe_api_key and self.poe_response_bot)
+
+    def tg_ready(self) -> bool:
+        return bool(self.tg_bot_token and self.tg_lead_chat_id)
 
 
 SETTINGS = AppSettings.load()

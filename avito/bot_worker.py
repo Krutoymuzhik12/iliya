@@ -14,7 +14,9 @@ from avito.message_batcher import MessageBatcher
 from config.settings import SETTINGS, AppSettings
 from db.database import Database
 from services.dialog_service import DialogService
+from services.leads import booked_from_history, phones_from_history, transcript
 from services.quiet_hours import QuietHours
+from services.telegram_leads import TelegramLeads
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class AvitoBot:
         self.db = Database(path=self.settings.db_path)
         self.dialog = DialogService(self.settings)
         self.quiet = QuietHours(self.settings)
+        self.tg = TelegramLeads(self.settings)
         self._chat_locks: dict[str, asyncio.Lock] = {}
         self._user_id: int = 0
         self._started_at: int = int(datetime.now(timezone.utc).timestamp())
@@ -85,6 +88,39 @@ class AvitoBot:
             hints.append(f"в профиле клиент «{dialog['client_name']}»")
         return hints
 
+    def _lead_text(self, chat_id: str, phones: list[str], booked: bool) -> str:
+        dialog = self.db.get(chat_id) or {}
+        why = []
+        if phones:
+            why.append("телефон")
+        if booked:
+            why.append("запись на замер")
+        lines = [
+            "Новый лид Avito",
+            f"Причина: {', '.join(why) or 'контакт'}",
+            f"Имя: {dialog.get('client_name') or '—'}",
+            f"Телефон: {', '.join(phones) or 'не оставил'}",
+            f"Объявление: {dialog.get('item_title') or '—'}",
+            f"Чат: {chat_id}",
+        ]
+        notes = transcript(self.db.history(chat_id))
+        if notes:
+            lines.extend(["", "Конспект:", notes])
+        return "\n".join(lines)[:4000]
+
+    async def _maybe_send_lead(self, chat_id: str) -> None:
+        if self.db.state(chat_id).get("lead_sent"):
+            return
+        history = self.db.history(chat_id)
+        phones = phones_from_history(history)
+        booked = booked_from_history(history)
+        if not phones and not booked:
+            return
+        sent = await self.tg.send(self._lead_text(chat_id, phones, booked))
+        if sent:
+            self.db.set_state(chat_id, lead_sent=True)
+            logger.info("Лид ушёл в Telegram chat=%s phones=%s booked=%s", chat_id, phones, booked)
+
     async def _flush_batch(self, chat_id: str, combined_text: str) -> None:
         async with self._chat_lock(chat_id):
             dialog = self.db.get(chat_id)
@@ -97,6 +133,7 @@ class AvitoBot:
         await self.dialog.delay_reply()
         if not await self._live_still_ours(chat_id):
             logger.info("flush отменён chat=%s — чат перехватили до генерации", chat_id)
+            await self._maybe_send_lead(chat_id)
             return
         reply, classification = await self.dialog.build_reply(
             history, combined_text, extra_hints=hints
@@ -104,11 +141,13 @@ class AvitoBot:
         async with self._chat_lock(chat_id):
             if not await self._live_still_ours(chat_id):
                 logger.info("flush отменён chat=%s — чат перехватили до отправки", chat_id)
+                await self._maybe_send_lead(chat_id)
                 return
             await self._say(chat_id, reply)
             if (classification or {}).get("need_manager"):
                 self.db.set_status(chat_id, MANUAL)
                 logger.info("Чат %s: [НУЖЕН_МЕНЕДЖЕР] - бот замолкает", chat_id)
+            await self._maybe_send_lead(chat_id)
             logger.info("flush done chat=%s", chat_id)
 
     @staticmethod
@@ -377,6 +416,7 @@ class AvitoBot:
                     self.db.set_status(chat_id, MANUAL)
                     logger.info("Чат %s: [НУЖЕН_МЕНЕДЖЕР] на дожиме - бот замолкает", chat_id)
                 self.db.record_followup_sent(chat_id, 1)
+            await self._maybe_send_lead(chat_id)
             logger.info("Дожим отправлен chat=%s", chat_id)
 
     async def run(self) -> None:
@@ -389,6 +429,7 @@ class AvitoBot:
             logger.info("Poe: %s", self.settings.poe_response_bot)
         else:
             logger.warning("POE_API_KEY не задан — бот не сможет генерировать ответы")
+        await self.tg.start()
         asyncio.create_task(self.run_followup_loop())
         while True:
             try:
