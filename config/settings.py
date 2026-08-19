@@ -26,10 +26,8 @@ class AppSettings:
     poll_interval_sec: float
     poe_api_key: str
     poe_base_url: str
-    poe_classifier_bot: str
     poe_response_bot: str
     send_system_prompts: bool
-    confidence_threshold: float
     history_limit: int
     fast_mode: bool
     reply_delay_min_sec: float
@@ -58,10 +56,8 @@ class AppSettings:
             poll_interval_sec=float(os.getenv("POLL_INTERVAL_SEC", "8")),
             poe_api_key=os.getenv("POE_API_KEY", "").strip(),
             poe_base_url=os.getenv("POE_BASE_URL", "https://api.poe.com/v1").rstrip("/"),
-            poe_classifier_bot=os.getenv("POE_CLASSIFIER_BOT", "Claude-Sonnet-4.5").strip(),
-            poe_response_bot=os.getenv("POE_RESPONSE_BOT", "Claude-Sonnet-4.5").strip(),
-            send_system_prompts=_bool_env("SEND_SYSTEM_PROMPTS", "true"),
-            confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.65")),
+            poe_response_bot=os.getenv("POE_RESPONSE_BOT", "IlyaDemoBal-Manager").strip(),
+            send_system_prompts=_bool_env("SEND_SYSTEM_PROMPTS", "false"),
             history_limit=int(os.getenv("HISTORY_LIMIT", "40")),
             fast_mode=_bool_env("FAST_MODE"),
             reply_delay_min_sec=float(os.getenv("REPLY_DELAY_MIN_SEC", "5")),
@@ -70,8 +66,8 @@ class AppSettings:
             message_batch_settle_sec=float(os.getenv("MESSAGE_BATCH_SETTLE_SEC", "1.0")),
             message_batch_tail_wait_sec=float(os.getenv("MESSAGE_BATCH_TAIL_WAIT_SEC", "4")),
             message_batch_max_wait_sec=float(os.getenv("MESSAGE_BATCH_MAX_WAIT_SEC", "25")),
-            company_name=os.getenv("COMPANY_NAME", "ГК Добрые").strip(),
-            manager_name=os.getenv("MANAGER_NAME", "Илья").strip(),
+            company_name=os.getenv("COMPANY_NAME", "Центр-Балкон").strip(),
+            manager_name=os.getenv("MANAGER_NAME", "Алексей").strip(),
             timezone=os.getenv("TIMEZONE", "Europe/Moscow").strip(),
             push_hour_start=int(os.getenv("PUSH_HOUR_START", "9")),
             push_hour_end=int(os.getenv("PUSH_HOUR_END", "18")),
@@ -86,7 +82,7 @@ class AppSettings:
         return bool(self.avito_client_id and self.avito_client_secret)
 
     def poe_ready(self) -> bool:
-        return bool(self.poe_api_key and self.poe_classifier_bot and self.poe_response_bot)
+        return bool(self.poe_api_key and self.poe_response_bot)
 
 
 SETTINGS = AppSettings.load()

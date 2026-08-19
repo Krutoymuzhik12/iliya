@@ -13,7 +13,7 @@ from avito.gatekeeper import BOT_OWNED, MANUAL, NOT_OURS, bot_owns, classify_fir
 from avito.message_batcher import MessageBatcher
 from config.settings import SETTINGS, AppSettings
 from db.database import Database
-from services.dialog_service import THINKING_INTENTS, DialogService
+from services.dialog_service import DialogService
 from services.quiet_hours import QuietHours
 
 logger = logging.getLogger(__name__)
@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 STOP_CMD_RE = re.compile(r"^\s*#\s*(стоп|stop)\b", re.I)
 START_CMD_RE = re.compile(r"^\s*#\s*(старт|start)\b", re.I)
 
-VOICE_HINT = "Напишите, пожалуйста, текстом — голосовые пока разберу чуть позже."
-UNSUPPORTED_HINT = "Напишите, пожалуйста, текстом — так отвечу быстрее."
+VOICE_HINT = "Напишите, пожалуйста, текстом - голосовые пока разберу чуть позже."
+UNSUPPORTED_HINT = "Напишите, пожалуйста, текстом - так отвечу быстрее."
 
 
 class AvitoBot:
@@ -106,12 +106,10 @@ class AvitoBot:
                 logger.info("flush отменён chat=%s — чат перехватили до отправки", chat_id)
                 return
             await self._say(chat_id, reply)
-            intent = (classification or {}).get("intent") or ""
-            thinking = intent.lower() in THINKING_INTENTS
-            self.db.set_state(chat_id, thinking=thinking)
-            logger.info(
-                "flush done chat=%s intent=%s thinking=%s", chat_id, intent, thinking
-            )
+            if (classification or {}).get("need_manager"):
+                self.db.set_status(chat_id, MANUAL)
+                logger.info("Чат %s: [НУЖЕН_МЕНЕДЖЕР] - бот замолкает", chat_id)
+            logger.info("flush done chat=%s", chat_id)
 
     @staticmethod
     def _chat_item(chat: dict[str, Any]) -> tuple[str | None, int | None]:
@@ -348,7 +346,8 @@ class AvitoBot:
             delay = min(delay, 120)
         for row in self.db.candidates_for_followup():
             chat_id = row["chat_id"]
-            if not self.db.state(chat_id).get("thinking"):
+            history = self.db.history(chat_id)
+            if not history or history[-1].get("role") != "assistant":
                 continue
             last = row.get("last_user_msg_at")
             if not last:
@@ -364,9 +363,8 @@ class AvitoBot:
             dialog = self.db.get(chat_id)
             if not bot_owns(dialog):
                 continue
-            history = self.db.history(chat_id)
             hints = self._hints(dialog or {}) + ["это дожим, не новое входящее"]
-            reply, _ = await self.dialog.build_reply(
+            reply, classification = await self.dialog.build_reply(
                 history,
                 "Клиент замолчал после того, как ушёл подумать. Напомни о себе коротко.",
                 extra_hints=hints,
@@ -375,8 +373,10 @@ class AvitoBot:
                 if not await self._live_still_ours(chat_id):
                     continue
                 await self._say(chat_id, reply)
+                if (classification or {}).get("need_manager"):
+                    self.db.set_status(chat_id, MANUAL)
+                    logger.info("Чат %s: [НУЖЕН_МЕНЕДЖЕР] на дожиме - бот замолкает", chat_id)
                 self.db.record_followup_sent(chat_id, 1)
-                self.db.set_state(chat_id, thinking=False)
             logger.info("Дожим отправлен chat=%s", chat_id)
 
     async def run(self) -> None:
@@ -386,7 +386,7 @@ class AvitoBot:
         logger.info("Бот запущен: Avito id=%s, все объявления аккаунта, без фильтра", self._user_id)
         await self._baseline_existing_chats()
         if self.settings.poe_ready():
-            logger.info("Poe: %s / %s", self.settings.poe_classifier_bot, self.settings.poe_response_bot)
+            logger.info("Poe: %s", self.settings.poe_response_bot)
         else:
             logger.warning("POE_API_KEY не задан — бот не сможет генерировать ответы")
         asyncio.create_task(self.run_followup_loop())

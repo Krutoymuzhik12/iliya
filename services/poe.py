@@ -1,8 +1,7 @@
-"""Poe: классификатор и менеджер. В промпт уходит история (до HISTORY_LIMIT)."""
+"""Один вынесенный бот на Poe. История — последние HISTORY_LIMIT сообщений."""
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
@@ -14,10 +13,10 @@ from config.settings import PROMPTS_DIR, SETTINGS
 logger = logging.getLogger(__name__)
 _prompt_cache: dict[str, str] = {}
 
+NEED_MANAGER_RE = re.compile(r"\[НУЖЕН_МЕНЕДЖЕР[^\]]*\]", re.I)
 
-def _read_prompt(name: str) -> str:
-    if not SETTINGS.send_system_prompts:
-        return ""
+
+def _load_prompt_file(name: str) -> str:
     if name in _prompt_cache:
         return _prompt_cache[name]
     path = PROMPTS_DIR / name
@@ -35,8 +34,11 @@ def _read_prompt(name: str) -> str:
     return text
 
 
-def _maybe_system(prompt_file: str) -> list[dict[str, str]]:
-    text = _read_prompt(prompt_file)
+def _maybe_system() -> list[dict[str, str]]:
+    """Промпт уже сидит в кастомном боте на Poe. Файл шлём только если явно включили."""
+    if not SETTINGS.send_system_prompts:
+        return []
+    text = _load_prompt_file("manager.txt")
     return [{"role": "system", "content": text}] if text else []
 
 
@@ -65,75 +67,21 @@ async def poe_chat(
     return (data["choices"][0]["message"]["content"] or "").strip()
 
 
-def _parse_json(raw: str) -> dict[str, Any] | None:
-    if not raw:
-        return None
-    txt = raw.strip()
-    if txt.startswith("```"):
-        txt = re.sub(r"^```[a-zA-Z]*\s*", "", txt)
-        txt = re.sub(r"\s*```$", "", txt).strip()
-    try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", txt, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except json.JSONDecodeError:
-                return None
-    return None
-
-
-def _transcript(messages: list[dict]) -> str:
-    lines = []
-    for m in messages:
-        who = "Клиент" if m["role"] == "user" else "Менеджер"
-        lines.append(f"{who}: {m['content']}")
-    return "\n".join(lines)
-
-
 def _last_history(history: list[dict]) -> list[dict]:
     limit = max(1, int(SETTINGS.history_limit))
     return history[-limit:]
 
 
-async def classify(history: list[dict], user_msg: str) -> dict[str, Any] | None:
-    history = _last_history(history)
-    last_assistant = next(
-        (m["content"] for m in reversed(history) if m["role"] == "assistant"), ""
-    )
-    msgs = _maybe_system("classifier.txt")
-    msgs.append(
-        {
-            "role": "user",
-            "content": (
-                f"ИСТОРИЯ ДИАЛОГА (последние {len(history)} сообщений, лимит {SETTINGS.history_limit}):\n"
-                f"{_transcript(history) or '(пусто)'}\n\n"
-                f"ПОСЛЕДНЯЯ РЕПЛИКА МЕНЕДЖЕРА: {last_assistant or '(ещё не было)'}\n\n"
-                f"СООБЩЕНИЕ КЛИЕНТА:\n{user_msg}\n\n"
-                "Верни строго JSON."
-            ),
-        }
-    )
-    raw = await poe_chat(SETTINGS.poe_classifier_bot, msgs, temperature=0.0, max_tokens=400)
-    result = _parse_json(raw)
-    if result is None:
-        return None
-    try:
-        result["confidence"] = float(result.get("confidence", 0))
-    except (TypeError, ValueError):
-        result["confidence"] = 0.0
-    return result
-
-
-def _sanitize_reply(raw: str) -> str:
-    txt = (raw or "").strip()
+def _sanitize_reply(raw: str) -> tuple[str, bool]:
+    need_manager = bool(NEED_MANAGER_RE.search(raw or ""))
+    txt = NEED_MANAGER_RE.sub("", raw or "").strip()
     txt = re.sub(r"\[\[.*?\]\]", "", txt).strip()
+    txt = txt.replace("—", "-")
     if "СЛУЖЕБН" not in txt.upper():
-        return txt
+        return txt, need_manager
     blocks = re.split(r"\n\s*-{3,}\s*\n|\n\s*\n", txt)
     clean = [b.strip() for b in blocks if b.strip() and "СЛУЖЕБН" not in b.upper()]
-    return "\n\n".join(clean) if clean else txt
+    return ("\n\n".join(clean) if clean else txt), need_manager
 
 
 async def generate_reply(
@@ -141,25 +89,24 @@ async def generate_reply(
     user_msg: str,
     *,
     extra_hints: list[str] | None = None,
-    classification: dict[str, Any] | None = None,
-) -> str:
-    msgs = _maybe_system("manager.txt")
+) -> tuple[str, bool]:
+    msgs = _maybe_system()
     for m in _last_history(history):
         msgs.append({"role": m["role"], "content": m["content"]})
     already_started = any(m.get("role") == "assistant" for m in history)
     hints = list(extra_hints or [])
-    if classification:
-        hints.append(f"intent={classification.get('intent')}")
     if already_started:
-        hints.append("диалог уже начат — не здоровайся повторно")
+        hints.append("диалог уже начат - не здоровайся повторно")
     else:
-        hints.append("это первое сообщение бота — поздоровайся один раз")
+        hints.append("это первое сообщение бота - поздоровайся один раз")
+    hints.append("канал Авито, не Telegram")
     content = user_msg
     if hints:
         content = (
             f"{user_msg}\n\n"
             f"(служебное, клиент этого не писал: {'; '.join(hints)}. "
-            "Ответь только репликой клиенту.)"
+            "Ответь только репликой клиенту. Метку [НУЖЕН_МЕНЕДЖЕР] ставь "
+            "только если нужен живой человек, клиент её не увидит.)"
         )
     msgs.append({"role": "user", "content": content})
     raw = await poe_chat(SETTINGS.poe_response_bot, msgs, temperature=0.7, max_tokens=600)

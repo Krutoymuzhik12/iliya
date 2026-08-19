@@ -1,4 +1,4 @@
-"""Классификатор + ответ менеджера. История в Poe — последние HISTORY_LIMIT."""
+"""Один бот на Poe: IlyaDemoBal-Manager. История — последние HISTORY_LIMIT."""
 
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ from services import poe
 
 logger = logging.getLogger(__name__)
 
-THINKING_INTENTS = {"thinking", "pause", "considering", "need_time"}
-FALLBACK = "Спасибо за сообщение! Сейчас уточню и вернусь с ответом."
+FALLBACK = "Сейчас уточню и вернусь с ответом."
 
 
 class DialogService:
@@ -34,22 +33,16 @@ class DialogService:
         user_text: str,
         *,
         extra_hints: list[str] | None = None,
-    ) -> tuple[str, dict[str, Any] | None]:
-        classification: dict[str, Any] | None = None
+    ) -> tuple[str, dict[str, Any]]:
         if not self.settings.poe_ready():
-            return FALLBACK, None
+            return FALLBACK, {"need_manager": False}
         try:
-            classification = await poe.classify(history, user_text)
-        except Exception:
-            logger.exception("Классификатор не ответил")
-        try:
-            reply = await poe.generate_reply(
+            reply, need_manager = await poe.generate_reply(
                 history,
                 user_text,
                 extra_hints=extra_hints,
-                classification=classification,
             )
         except Exception:
-            logger.exception("Менеджер не ответил")
-            reply = FALLBACK
-        return (reply or FALLBACK).strip(), classification
+            logger.exception("Poe не ответил")
+            return FALLBACK, {"need_manager": False}
+        return (reply or FALLBACK).strip(), {"need_manager": bool(need_manager)}
