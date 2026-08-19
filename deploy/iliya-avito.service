@@ -1,0 +1,17 @@
+[Unit]
+Description=Iliya Avito messenger bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/iliya_avito
+ExecStart=/opt/iliya_avito/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+User=iliya
+Group=iliya
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

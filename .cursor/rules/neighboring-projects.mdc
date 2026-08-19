@@ -1,0 +1,24 @@
+---
+description: Соседние проекты в C.HSE — откуда брать готовые решения, не изобретать заново
+alwaysApply: true
+---
+
+# Соседние проекты (`D:\C.HSE`)
+
+Этот репозиторий — Avito-бот. Код и паттерны уже есть рядом. Перед новой фичей сначала смотри соседний проект, затем копируй/адаптируй, не пиши с нуля.
+
+| Задача | Откуда брать |
+|---|---|
+| Avito OAuth + Messenger API (httpx) | `mebel_Iliya/avito/api.py`, `test_avito_Vitaliy/avito/api.py` |
+| Поллинг чатов, backlog, dry-run | `Avito_test` (гипотеза API; SDK `avito-py` для чтения сырой JSON, типизированные модели ломают `text`) |
+| Gatekeeper: new / existing / manual | `mebel_Iliya/avito/gatekeeper.py`, `Karina/tg/gatekeeper.py` |
+| Ручной перехват менеджера | `mebel_Iliya/avito/bot_worker.py` (`_apply_owner_messages`) |
+| Push/Pull + тихие часы МСК | `giper_stroy/app/core/quiet_hours.py`, `Vladimir_mebel_osnova` |
+| Дожим через 4 часа | `giper_stroy` (`followup_silence_hours=4.0`), `Vladimir_mebel_osnova` |
+| Батчер входящих | `mebel_Iliya/avito/message_batcher.py`, `test_avito_Vitaliy` |
+| Классификатор + менеджер (Poe) | `test_avito_Vitaliy`, `test_bot_potolki`, `mebel_Iliya/prompts` |
+| Онбординг ключей Avito | `connect_hub/instructions/avito.md` |
+
+Не копировать: Vision/Qdrant/каталог из `mebel_Iliya`, Telethon/WhatsApp-транспорты, секреты из `.env`.
+
+Стек транспорта: `httpx` + свой клиент. Не опираться на типизированные модели `avito-py`.
