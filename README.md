@@ -28,4 +28,4 @@ copy .env.example .env
 .venv\Scripts\python main.py
 ```
 
-На сервере: `deploy/DEPLOY.md`.
+Сервер: `root@msk-1-vm-xcjy:/var/opt/ilya-demo-balkon`. Подробно: `deploy/DEPLOY.md`.

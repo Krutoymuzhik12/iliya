@@ -1,17 +1,22 @@
 [Unit]
-Description=Iliya Avito messenger bot
+Description=Iliya Avito messenger bot (ГК Добрые)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/iliya_avito
-ExecStart=/opt/iliya_avito/.venv/bin/python main.py
+WorkingDirectory=/var/opt/ilya-demo-balkon
+ExecStart=/var/opt/ilya-demo-balkon/.venv/bin/python main.py
 Restart=always
 RestartSec=10
-User=iliya
-Group=iliya
+StartLimitBurst=5
+StartLimitIntervalSec=300
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/opt/ilya-demo-balkon
+Environment=LANG=C.UTF-8
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iliya-avito
 
 [Install]
 WantedBy=multi-user.target

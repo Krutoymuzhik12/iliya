@@ -1,28 +1,46 @@
 # Сервер
 
-Поллинг, белый IP не нужен.
+Хост: `root@msk-1-vm-xcjy`
+Каталог: `/var/opt/ilya-demo-balkon`
+Поллинг, белый IP не нужен. Заходим root, отдельный пользователь не нужен.
+
+На сервере, уже стоя в каталоге или из любого места:
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip git
-sudo useradd -r -s /bin/bash -d /opt/iliya_avito iliya
-sudo mkdir -p /opt/iliya_avito && sudo chown iliya:iliya /opt/iliya_avito
-sudo -u iliya git clone https://github.com/Krutoymuzhik12/iliya.git /opt/iliya_avito
-cd /opt/iliya_avito
-sudo -u iliya python3 -m venv .venv
-sudo -u iliya .venv/bin/pip install -U pip -r requirements.txt
+cd /var/opt
+# если каталог не пустой — убрать старое демо в сторону
+[ -d ilya-demo-balkon ] && [ -n "$(ls -A ilya-demo-balkon 2>/dev/null)" ] && mv ilya-demo-balkon ilya-demo-balkon.bak.$(date +%F-%H%M)
+git clone https://github.com/Krutoymuzhik12/iliya.git /var/opt/ilya-demo-balkon
+cd /var/opt/ilya-demo-balkon
+python3 -m venv .venv
+.venv/bin/pip install -U pip -r requirements.txt
 ```
 
-Положить `.env` в `/opt/iliya_avito/.env` (ключи Avito и `POE_API_KEY`), права 600:
+`.env` с рабочей машины (секреты в git не лежат):
 
 ```bash
-sudo nano /opt/iliya_avito/.env
-sudo chown iliya:iliya /opt/iliya_avito/.env
-sudo chmod 600 /opt/iliya_avito/.env
+scp .env root@msk-1-vm-xcjy:/var/opt/ilya-demo-balkon/.env
 ```
 
+На сервере:
+
 ```bash
-sudo cp /opt/iliya_avito/deploy/iliya-avito.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now iliya-avito
-sudo journalctl -u iliya-avito -f
+chmod 600 /var/opt/ilya-demo-balkon/.env
+cd /var/opt/ilya-demo-balkon && .venv/bin/python -c "from config.settings import SETTINGS; print('avito:', SETTINGS.avito_ready(), 'poe:', SETTINGS.poe_ready())"
+```
+
+Запуск:
+
+```bash
+cp /var/opt/ilya-demo-balkon/deploy/iliya-avito.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now iliya-avito
+systemctl status iliya-avito --no-pager
+journalctl -u iliya-avito -f
+```
+
+Обновление кода:
+
+```bash
+cd /var/opt/ilya-demo-balkon && git pull && .venv/bin/pip install -r requirements.txt && systemctl restart iliya-avito
 ```
