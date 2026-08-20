@@ -36,6 +36,17 @@ NON_TEXT_MARKERS = {
 }
 NON_TEXT_DEFAULT = "[клиент прислал вложение без текста]"
 
+# Как называть вложение менеджеру в Telegram.
+NON_TEXT_NAMES = {
+    "voice": "голосовое сообщение",
+    "image": "фото",
+    "file": "файл",
+    "link": "ссылка",
+    "location": "геолокация",
+    "item": "другое объявление",
+    "call": "звонок по объявлению",
+}
+
 # Дожим - единственное место, где входящего нет и в Poe нужен хоть какой-то запрос.
 FOLLOWUP_TRIGGER = "Клиент молчит несколько часов. Напомни о себе."
 
@@ -115,6 +126,28 @@ class AvitoBot:
         if notes:
             lines.extend(["", "Конспект:", notes])
         return "\n".join(lines)[:4000]
+
+    async def _notify_attachment(self, chat_id: str, kinds: dict[str, int]) -> None:
+        """Вложение бот прочитать не может - зовём менеджера в Telegram."""
+        dialog = self.db.get(chat_id) or {}
+        what = ", ".join(
+            f"{NON_TEXT_NAMES.get(kind, kind or 'вложение')}"
+            + (f" x{count}" if count > 1 else "")
+            for kind, count in kinds.items()
+        )
+        lines = [
+            "Клиент прислал вложение, бот его не читает",
+            f"Что: {what}",
+            f"Объявление: {dialog.get('item_title') or '—'}",
+            f"Профиль Авито: {dialog.get('client_name') or '—'}",
+            f"Чат: {chat_id}",
+            "",
+            "Посмотрите переписку в Авито - бот отвечает вслепую.",
+        ]
+        sent = await self.tg.send("\n".join(lines))
+        logger.info(
+            "Вложение chat=%s %s, менеджеру в TG: %s", chat_id, kinds, "ушло" if sent else "не ушло"
+        )
 
     async def _maybe_send_lead(self, chat_id: str) -> None:
         if self.db.state(chat_id).get("lead_sent"):
@@ -332,17 +365,22 @@ class AvitoBot:
         )
 
         parts: list[str] = []
+        attachments: dict[str, int] = {}
         for m in incoming:
             text = message_text(m)
             if text:
                 parts.append(text)
                 continue
-            marker = NON_TEXT_MARKERS.get(str(m.get("type") or ""), NON_TEXT_DEFAULT)
+            kind = str(m.get("type") or "")
+            attachments[kind] = attachments.get(kind, 0) + 1
+            marker = NON_TEXT_MARKERS.get(kind, NON_TEXT_DEFAULT)
             # Пять фото подряд - одна пометка, а не пять одинаковых строк.
             if marker not in parts:
                 parts.append(marker)
         for part in parts:
             await self._batcher.enqueue(chat_id, part)
+        if attachments:
+            await self._notify_attachment(chat_id, attachments)
 
     async def _baseline_existing_chats(self) -> None:
         chats = await self.api.chats(self._user_id, unread_only=False, limit=100)
