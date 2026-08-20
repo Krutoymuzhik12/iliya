@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from avito.api import AvitoApi, message_text, voice_id
+from avito.api import AvitoApi, attachment_name, attachment_url, message_text, voice_id
 from avito.gatekeeper import BOT_OWNED, MANUAL, NOT_OURS, bot_owns, classify_first_contact
 from avito.message_batcher import MessageBatcher
 from config.settings import SETTINGS, AppSettings
@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 STOP_CMD_RE = re.compile(r"^\s*#\s*(стоп|stop)\b", re.I)
 START_CMD_RE = re.compile(r"^\s*#\s*(старт|start)\b", re.I)
 
-# Сообщение без текста (фото, голосовое, вложение) кладём в диалог как факт.
-# Своих текстов клиенту код не пишет: отвечает бот на Poe.
+# Вложение, которое бот прочитать не может: он замолкает и отдаёт чат менеджеру.
+# Голосовые сюда попадают только если не расшифровались.
 NON_TEXT_MARKERS = {
     "voice": "[клиент прислал голосовое сообщение]",
     "image": "[клиент прислал фото]",
+    "video": "[клиент прислал видео]",
     "file": "[клиент прислал файл]",
     "link": "[клиент прислал ссылку]",
     "location": "[клиент прислал геолокацию]",
@@ -41,12 +42,16 @@ NON_TEXT_DEFAULT = "[клиент прислал вложение без тек�
 NON_TEXT_NAMES = {
     "voice": "голосовое сообщение",
     "image": "фото",
+    "video": "видео",
     "file": "файл",
     "link": "ссылка",
     "location": "геолокация",
     "item": "другое объявление",
     "call": "звонок по объявлению",
 }
+
+# Звонок - не вложение: отвечать на него нечего, но и молчать в чате незачем.
+INFO_ONLY_KINDS = {"call"}
 
 # Дожим - единственное место, где входящего нет и в Poe нужен хоть какой-то запрос.
 FOLLOWUP_TRIGGER = "Клиент молчит несколько часов. Напомни о себе."
@@ -128,27 +133,77 @@ class AvitoBot:
             lines.extend(["", "Конспект:", notes])
         return "\n".join(lines)[:4000]
 
-    async def _notify_attachment(self, chat_id: str, kinds: dict[str, int]) -> None:
-        """Вложение бот прочитать не может - зовём менеджера в Telegram."""
+    def _attachment_text(self, chat_id: str, kinds: dict[str, int], stopped: bool) -> str:
         dialog = self.db.get(chat_id) or {}
         what = ", ".join(
-            f"{NON_TEXT_NAMES.get(kind, kind or 'вложение')}"
-            + (f" x{count}" if count > 1 else "")
+            NON_TEXT_NAMES.get(kind, kind or "вложение") + (f" x{count}" if count > 1 else "")
             for kind, count in kinds.items()
         )
+        head = (
+            "Клиент прислал то, что бот не понимает — бот замолчал, чат на вас"
+            if stopped
+            else "Событие в чате, бот продолжает работать"
+        )
         lines = [
-            "Клиент прислал вложение, бот его не читает",
+            head,
             f"Что: {what}",
             f"Объявление: {dialog.get('item_title') or '—'}",
             f"Профиль Авито: {dialog.get('client_name') or '—'}",
             f"Чат: {chat_id}",
-            "",
-            "Посмотрите переписку в Авито - бот отвечает вслепую.",
         ]
-        sent = await self.tg.send("\n".join(lines))
+        notes = transcript(self.db.history(chat_id))
+        if notes:
+            lines.extend(["", "Конспект:", notes])
+        if stopped:
+            lines.extend(["", "Ответьте клиенту в Авито. Вернуть бота — «#старт» в чат."])
+        return "\n".join(lines)[:4000]
+
+    async def _handoff_attachment(
+        self, chat_id: str, messages: list[dict], texts: list[str] | None = None
+    ) -> None:
+        """Бот замолкает и отдаёт чат менеджеру: вложение он всё равно не прочитает."""
+        for text in texts or []:
+            self.db.append_message(chat_id, "user", text)
+        kinds: dict[str, int] = {}
+        for m in messages:
+            kind = str(m.get("type") or "")
+            kinds[kind] = kinds.get(kind, 0) + 1
+            self.db.append_message(chat_id, "user", NON_TEXT_MARKERS.get(kind, NON_TEXT_DEFAULT))
+        stopped = not kinds.keys() <= INFO_ONLY_KINDS
+        if stopped and (self.db.get(chat_id) or {}).get("status") == BOT_OWNED:
+            self.db.set_status(chat_id, MANUAL)
+            await self._batcher.drop(chat_id)
+            logger.info("Чат %s: вложение %s — бот замолчал, чат менеджеру", chat_id, kinds)
+        sent = await self.tg.send(self._attachment_text(chat_id, kinds, stopped))
         logger.info(
             "Вложение chat=%s %s, менеджеру в TG: %s", chat_id, kinds, "ушло" if sent else "не ушло"
         )
+        for m in messages:
+            await self._forward_attachment(chat_id, m)
+        await self._maybe_send_lead(chat_id)
+
+    async def _forward_attachment(self, chat_id: str, message: dict) -> None:
+        """Само вложение — в группу, чтобы менеджер не лазил в Авито."""
+        kind = str(message.get("type") or "")
+        if kind in INFO_ONLY_KINDS:
+            return
+        url = await self._voice_url(message) if kind == "voice" else attachment_url(message)
+        if not url:
+            return
+        caption = f"{NON_TEXT_NAMES.get(kind, 'вложение')} из чата {chat_id}"
+        data = await self.api.download(url)
+        if not data:
+            # Ссылки Авито бывают короткоживущие — отдаём хотя бы её.
+            await self.tg.send(f"{caption}\nСкачать не вышло, ссылка: {url}")
+            return
+        name = attachment_name(message)
+        if kind == "image":
+            await self.tg.send_photo(data, filename=name or "photo.jpg", caption=caption)
+        elif kind == "voice":
+            suffix = ".mp4" if ".mp4" in url.lower() else ".mp3"
+            await self.tg.send_audio(data, filename=name or f"voice{suffix}", caption=caption)
+        else:
+            await self.tg.send_document(data, filename=name or "attachment.bin", caption=caption)
 
     async def _maybe_send_lead(self, chat_id: str) -> None:
         if self.db.state(chat_id).get("lead_sent"):
@@ -366,14 +421,13 @@ class AvitoBot:
         )
 
         parts: list[str] = []
-        attachments: dict[str, int] = {}
+        attachments: list[dict] = []
         for m in incoming:
             text = message_text(m)
             if text:
                 parts.append(text)
                 continue
-            kind = str(m.get("type") or "")
-            if kind == "voice":
+            if str(m.get("type") or "") == "voice":
                 recognized = await self._transcribe_voice(m)
                 if recognized:
                     logger.info("Голосовое chat=%s → %r", chat_id, recognized[:80])
@@ -381,17 +435,21 @@ class AvitoBot:
                     # переспрашивать «правильно ли я понял» бот не должен.
                     parts.append(recognized)
                     continue
-            attachments[kind] = attachments.get(kind, 0) + 1
-            marker = NON_TEXT_MARKERS.get(kind, NON_TEXT_DEFAULT)
-            # Пять фото подряд - одна пометка, а не пять одинаковых строк.
-            if marker not in parts:
-                parts.append(marker)
+            attachments.append(m)
+
+        if attachments:
+            unreadable = any(
+                str(m.get("type") or "") not in INFO_ONLY_KINDS for m in attachments
+            )
+            # Текст, пришедший вместе с вложением, в Poe не уходит - только в историю,
+            # чтобы менеджер увидел его в конспекте.
+            await self._handoff_attachment(chat_id, attachments, parts if unreadable else [])
+            if unreadable:
+                return
         for part in parts:
             await self._batcher.enqueue(chat_id, part)
-        if attachments:
-            await self._notify_attachment(chat_id, attachments)
 
-    async def _transcribe_voice(self, message: dict) -> str | None:
+    async def _voice_url(self, message: dict) -> str | None:
         vid = voice_id(message)
         if not vid:
             return None
@@ -400,7 +458,10 @@ class AvitoBot:
         except Exception as e:
             logger.warning("Не получить ссылку на голосовое: %s", e)
             return None
-        url = urls.get(vid) or (next(iter(urls.values())) if urls else None)
+        return urls.get(vid) or (next(iter(urls.values())) if urls else None)
+
+    async def _transcribe_voice(self, message: dict) -> str | None:
+        url = await self._voice_url(message)
         if not url:
             return None
         data = await self.api.download(url)

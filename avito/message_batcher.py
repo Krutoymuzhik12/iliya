@@ -67,6 +67,18 @@ class MessageBatcher:
             (text or "[пусто]")[:50],
         )
 
+    async def drop(self, chat_id: str) -> int:
+        """Выбросить накопленное: чат ушёл менеджеру, отвечать уже не надо."""
+        state = self._states.get(chat_id)
+        if state is None:
+            return 0
+        async with state.lock:
+            dropped = len([t for t in state.texts if t])
+            state.texts.clear()
+        if dropped:
+            logger.info("%s batch DROP chat=%s parts=%s", self.log_prefix, chat_id, dropped)
+        return dropped
+
     def _wait_sec(self, state: _BatchState) -> float:
         return self.tail_wait_sec if state.tail_mode else self.batch_wait_sec
 

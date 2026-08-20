@@ -41,6 +41,43 @@ class TelegramLeads:
         except Exception:
             logger.exception("TG: не удалось проверить бота")
 
+    async def send_photo(self, data: bytes, *, filename: str = "photo.jpg", caption: str = "") -> bool:
+        """Фото не прошло (например, больше 10 МБ) - уходит файлом."""
+        if await self._send_media("sendPhoto", "photo", data, filename, caption):
+            return True
+        return await self.send_document(data, filename=filename, caption=caption)
+
+    async def send_audio(self, data: bytes, *, filename: str = "voice.mp3", caption: str = "") -> bool:
+        if await self._send_media("sendAudio", "audio", data, filename, caption):
+            return True
+        return await self.send_document(data, filename=filename, caption=caption)
+
+    async def send_document(
+        self, data: bytes, *, filename: str = "file.bin", caption: str = ""
+    ) -> bool:
+        return await self._send_media("sendDocument", "document", data, filename, caption)
+
+    async def _send_media(
+        self, method: str, field: str, data: bytes, filename: str, caption: str
+    ) -> bool:
+        if not self._ok or not data:
+            return False
+        url = f"https://api.telegram.org/bot{self.settings.tg_bot_token}/{method}"
+        payload: dict[str, str] = {"chat_id": str(self.settings.tg_lead_chat_id)}
+        if caption:
+            payload["caption"] = caption[:1000]
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                r = await client.post(url, data=payload, files={field: (filename, data)})
+                result = r.json()
+            if not result.get("ok"):
+                logger.warning("TG %s: %s", method, result)
+                return False
+            return True
+        except Exception:
+            logger.exception("Не удалось отправить вложение в Telegram (%s)", method)
+            return False
+
     async def send(self, text: str) -> bool:
         if not self._ok or not text:
             return False

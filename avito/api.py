@@ -150,6 +150,52 @@ class AvitoApi:
             return None
 
 
+def _size_area(key: str) -> int:
+    try:
+        w, h = key.lower().split("x")
+        return int(w) * int(h)
+    except (ValueError, AttributeError):
+        return 0
+
+
+def best_image_url(message: dict) -> str | None:
+    """Ссылка на самый большой размер картинки из входящего сообщения."""
+    sizes = (((message.get("content") or {}).get("image") or {}).get("sizes")) or {}
+    if not isinstance(sizes, dict) or not sizes:
+        return None
+    return sizes.get(max(sizes.keys(), key=_size_area))
+
+
+def _find_url(node: Any) -> str | None:
+    if isinstance(node, str):
+        return node if node.startswith("http") else None
+    if isinstance(node, dict):
+        for value in node.values():
+            found = _find_url(value)
+            if found:
+                return found
+    if isinstance(node, list):
+        for value in node:
+            found = _find_url(value)
+            if found:
+                return found
+    return None
+
+
+def attachment_url(message: dict) -> str | None:
+    """Файл, видео, ссылка - структуры у Авито разные, ищем первый http в content."""
+    return best_image_url(message) or _find_url(message.get("content") or {})
+
+
+def attachment_name(message: dict) -> str | None:
+    content = message.get("content") or {}
+    for key in ("file", "video", "document"):
+        name = (content.get(key) or {}).get("name") if isinstance(content.get(key), dict) else None
+        if name:
+            return str(name)
+    return None
+
+
 def voice_id(message: dict) -> str | None:
     voice = ((message.get("content") or {}).get("voice")) or {}
     vid = voice.get("voice_id") or voice.get("id")
