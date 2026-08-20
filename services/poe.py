@@ -15,6 +15,14 @@ _prompt_cache: dict[str, str] = {}
 
 NEED_MANAGER_RE = re.compile(r"\[НУЖЕН_МЕНЕДЖЕР[^\]]*\]", re.I)
 
+# Модель здоровается в каждом сообщении, хотя в подсказке сказано не здороваться.
+# Режем приветствие сами, если бот в этом чате уже писал.
+GREETING_RE = re.compile(
+    r"^\s*(?:здравствуйте|здрасьте|доброго\s+дня|добрый\s+день|доброе\s+утро"
+    r"|добрый\s+вечер|приветствую|привет)\s*[!,.;:)…-]+\s*",
+    re.I,
+)
+
 
 def _load_prompt_file(name: str) -> str:
     if name in _prompt_cache:
@@ -84,6 +92,19 @@ def _sanitize_reply(raw: str) -> tuple[str, bool]:
     return ("\n\n".join(clean) if clean else txt), need_manager
 
 
+def strip_greeting(text: str) -> str:
+    """Убрать приветствие из начала ответа. «Здравствуйте! добрый день!» - тоже."""
+    cut = text or ""
+    for _ in range(3):
+        stripped = GREETING_RE.sub("", cut, count=1).lstrip()
+        if stripped == cut:
+            break
+        cut = stripped
+    if not cut:
+        return text
+    return cut[0].upper() + cut[1:]
+
+
 async def generate_reply(
     history: list[dict],
     user_msg: str,
@@ -96,10 +117,19 @@ async def generate_reply(
     already_started = any(m.get("role") == "assistant" for m in history)
     hints = list(extra_hints or [])
     if already_started:
-        hints.append("диалог уже начат - не здоровайся повторно")
+        hints.append(
+            "диалог уже начат, ты здоровался в первом сообщении - "
+            "не здоровайся, начинай сразу с ответа по делу"
+        )
     else:
         hints.append("это первое сообщение бота - поздоровайся один раз")
     hints.append("канал Авито, не Telegram")
+    hints.append(
+        "если клиент просит отдельные стеклопакеты по размерам: "
+        "не говори 'производство запускаем' и не говори что запускаете производство; "
+        "скажи что сейчас их нет, в течение недели появятся, и попроси номер; "
+        "сам эту тему не поднимай"
+    )
     content = user_msg
     if hints:
         content = (
@@ -110,4 +140,7 @@ async def generate_reply(
         )
     msgs.append({"role": "user", "content": content})
     raw = await poe_chat(SETTINGS.poe_response_bot, msgs, temperature=0.7, max_tokens=600)
-    return _sanitize_reply(raw)
+    reply, need_manager = _sanitize_reply(raw)
+    if already_started:
+        reply = strip_greeting(reply)
+    return reply, need_manager

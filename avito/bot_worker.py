@@ -391,6 +391,11 @@ class AvitoBot:
             history = self.db.history(chat_id)
             if not history or history[-1].get("role") != "assistant":
                 continue
+            if phones_from_history(history):
+                # Номер уже есть, дальше работает менеджер - дожимать нечего.
+                self.db.record_followup_sent(chat_id, 1)
+                logger.info("Дожим закрыт chat=%s - клиент оставил номер", chat_id)
+                continue
             last = row.get("last_user_msg_at")
             if not last:
                 continue
