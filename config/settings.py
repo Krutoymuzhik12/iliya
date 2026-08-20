@@ -46,6 +46,11 @@ class AppSettings:
     followup_poll_sec: float
     tg_bot_token: str
     tg_lead_chat_id: int
+    tg_test_mode: bool
+    transcription_provider: str
+    whisper_model: str
+    openai_api_key: str
+    poe_whisper_bot: str
     db_path: Path
     log_path: Path
 
@@ -78,6 +83,11 @@ class AppSettings:
             followup_poll_sec=float(os.getenv("FOLLOWUP_POLL_SEC", "300")),
             tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
             tg_lead_chat_id=int(os.getenv("TG_LEAD_CHAT_ID", "0") or 0),
+            tg_test_mode=_bool_env("TG_TEST_MODE"),
+            transcription_provider=os.getenv("TRANSCRIPTION_PROVIDER", "auto").strip().lower(),
+            whisper_model=os.getenv("WHISPER_MODEL", "small").strip(),
+            openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+            poe_whisper_bot=os.getenv("POE_WHISPER_BOT", "Gemini-2.5-Flash").strip(),
             db_path=DATA_DIR / "dialogs.db",
             log_path=DATA_DIR / "bot.log",
         )
@@ -90,6 +100,9 @@ class AppSettings:
 
     def tg_ready(self) -> bool:
         return bool(self.tg_bot_token and self.tg_lead_chat_id)
+
+    def tg_test_ready(self) -> bool:
+        return bool(self.tg_test_mode and self.tg_bot_token)
 
 
 SETTINGS = AppSettings.load()

@@ -132,6 +132,29 @@ class AvitoApi:
         )
         return (data or {}).get("voices_urls") or {}
 
+    async def download(self, url: str) -> bytes | None:
+        """Ссылки Авито обычно подписанные; если ответили 401/403 - идём с токеном."""
+        try:
+            resp = await self._http.get(url, follow_redirects=True)
+            if resp.status_code in (401, 403):
+                token = await self._get_token()
+                resp = await self._http.get(
+                    url, follow_redirects=True, headers={"Authorization": f"Bearer {token}"}
+                )
+            if resp.status_code >= 400:
+                logger.warning("Скачивание %s: HTTP %s", url[:80], resp.status_code)
+                return None
+            return resp.content
+        except Exception as e:
+            logger.warning("Скачивание %s не удалось: %s", url[:80], e)
+            return None
+
+
+def voice_id(message: dict) -> str | None:
+    voice = ((message.get("content") or {}).get("voice")) or {}
+    vid = voice.get("voice_id") or voice.get("id")
+    return str(vid) if vid else None
+
 
 def message_text(message: dict) -> str:
     return ((message.get("content") or {}).get("text") or "").strip()

@@ -8,11 +8,12 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from avito.api import AvitoApi, message_text
+from avito.api import AvitoApi, message_text, voice_id
 from avito.gatekeeper import BOT_OWNED, MANUAL, NOT_OURS, bot_owns, classify_first_contact
 from avito.message_batcher import MessageBatcher
 from config.settings import SETTINGS, AppSettings
 from db.database import Database
+from services import transcription
 from services.dialog_service import DialogService
 from services.leads import booked_from_history, phones_from_history, transcript
 from services.quiet_hours import QuietHours
@@ -372,6 +373,14 @@ class AvitoBot:
                 parts.append(text)
                 continue
             kind = str(m.get("type") or "")
+            if kind == "voice":
+                recognized = await self._transcribe_voice(m)
+                if recognized:
+                    logger.info("Голосовое chat=%s → %r", chat_id, recognized[:80])
+                    # Расшифровка идёт в Poe как обычная реплика клиента:
+                    # переспрашивать «правильно ли я понял» бот не должен.
+                    parts.append(recognized)
+                    continue
             attachments[kind] = attachments.get(kind, 0) + 1
             marker = NON_TEXT_MARKERS.get(kind, NON_TEXT_DEFAULT)
             # Пять фото подряд - одна пометка, а не пять одинаковых строк.
@@ -381,6 +390,25 @@ class AvitoBot:
             await self._batcher.enqueue(chat_id, part)
         if attachments:
             await self._notify_attachment(chat_id, attachments)
+
+    async def _transcribe_voice(self, message: dict) -> str | None:
+        vid = voice_id(message)
+        if not vid:
+            return None
+        try:
+            urls = await self.api.voice_files(self._user_id, [vid])
+        except Exception as e:
+            logger.warning("Не получить ссылку на голосовое: %s", e)
+            return None
+        url = urls.get(vid) or (next(iter(urls.values())) if urls else None)
+        if not url:
+            return None
+        data = await self.api.download(url)
+        if not data:
+            return None
+        suffix = ".mp4" if ".mp4" in url.lower() else ".mp3"
+        text = await transcription.transcribe_bytes(data, suffix=suffix)
+        return None if transcription.failed(text) else text
 
     async def _baseline_existing_chats(self) -> None:
         chats = await self.api.chats(self._user_id, unread_only=False, limit=100)
@@ -486,6 +514,10 @@ class AvitoBot:
             logger.info("Poe: %s", self.settings.poe_response_bot)
         else:
             logger.warning("POE_API_KEY не задан — бот не сможет генерировать ответы")
+        try:
+            await asyncio.to_thread(transcription.warm_local_model)
+        except Exception as e:
+            logger.warning("Прогрев Whisper не удался: %s", e)
         await self.tg.start()
         asyncio.create_task(self.run_followup_loop())
         while True:
