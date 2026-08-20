@@ -105,40 +105,13 @@ def strip_greeting(text: str) -> str:
     return cut[0].upper() + cut[1:]
 
 
-async def generate_reply(
-    history: list[dict],
-    user_msg: str,
-    *,
-    extra_hints: list[str] | None = None,
-) -> tuple[str, bool]:
+async def generate_reply(history: list[dict], user_msg: str) -> tuple[str, bool]:
+    """В Poe уходит только история чата и сообщение клиента, без служебных вставок."""
     msgs = _maybe_system()
     for m in _last_history(history):
         msgs.append({"role": m["role"], "content": m["content"]})
     already_started = any(m.get("role") == "assistant" for m in history)
-    hints = list(extra_hints or [])
-    if already_started:
-        hints.append(
-            "диалог уже начат, ты здоровался в первом сообщении - "
-            "не здоровайся, начинай сразу с ответа по делу"
-        )
-    else:
-        hints.append("это первое сообщение бота - поздоровайся один раз")
-    hints.append("канал Авито, не Telegram")
-    hints.append(
-        "если клиент просит отдельные стеклопакеты по размерам: "
-        "не говори 'производство запускаем' и не говори что запускаете производство; "
-        "скажи что сейчас их нет, в течение недели появятся, и попроси номер; "
-        "сам эту тему не поднимай"
-    )
-    content = user_msg
-    if hints:
-        content = (
-            f"{user_msg}\n\n"
-            f"(служебное, клиент этого не писал: {'; '.join(hints)}. "
-            "Ответь только репликой клиенту. Метку [НУЖЕН_МЕНЕДЖЕР] ставь "
-            "только если нужен живой человек, клиент её не увидит.)"
-        )
-    msgs.append({"role": "user", "content": content})
+    msgs.append({"role": "user", "content": user_msg})
     raw = await poe_chat(SETTINGS.poe_response_bot, msgs, temperature=0.7, max_tokens=600)
     reply, need_manager = _sanitize_reply(raw)
     if already_started:

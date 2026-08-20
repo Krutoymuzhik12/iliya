@@ -26,6 +26,9 @@ START_CMD_RE = re.compile(r"^\s*#\s*(старт|start)\b", re.I)
 VOICE_HINT = "Напишите, пожалуйста, текстом - голосовые пока разберу чуть позже."
 UNSUPPORTED_HINT = "Напишите, пожалуйста, текстом - так отвечу быстрее."
 
+# Дожим - единственное место, где входящего нет и в Poe нужен хоть какой-то запрос.
+FOLLOWUP_TRIGGER = "Клиент молчит несколько часов. Напомни о себе."
+
 
 class AvitoBot:
     def __init__(self, settings: AppSettings | None = None):
@@ -83,14 +86,6 @@ class AvitoBot:
         status = self._apply_owner_messages(chat_id, messages)
         return status == BOT_OWNED
 
-    def _hints(self, dialog: dict[str, Any]) -> list[str]:
-        hints = []
-        if dialog.get("item_title"):
-            hints.append(f"клиент пишет по объявлению «{dialog['item_title']}»")
-        # Имя из профиля Авито в диалог не отдаём: там часто вывеска или чужое имя.
-        # Бот спрашивает имя сам, в конце, после номера.
-        return hints
-
     def _lead_text(self, chat_id: str, phones: list[str], booked: bool) -> str:
         dialog = self.db.get(chat_id) or {}
         why = []
@@ -132,15 +127,12 @@ class AvitoBot:
                 return
             self.db.append_message(chat_id, "user", combined_text)
             history = self.db.history(chat_id)[:-1]
-            hints = self._hints(dialog)
         await self.dialog.delay_reply()
         if not await self._live_still_ours(chat_id):
             logger.info("flush отменён chat=%s — чат перехватили до генерации", chat_id)
             await self._maybe_send_lead(chat_id)
             return
-        reply, classification = await self.dialog.build_reply(
-            history, combined_text, extra_hints=hints
-        )
+        reply, classification = await self.dialog.build_reply(history, combined_text)
         async with self._chat_lock(chat_id):
             if not await self._live_still_ours(chat_id):
                 logger.info("flush отменён chat=%s — чат перехватили до отправки", chat_id)
@@ -410,12 +402,8 @@ class AvitoBot:
             dialog = self.db.get(chat_id)
             if not bot_owns(dialog):
                 continue
-            hints = self._hints(dialog or {}) + ["это дожим, не новое входящее"]
-            reply, classification = await self.dialog.build_reply(
-                history,
-                "Клиент замолчал после того, как ушёл подумать. Напомни о себе коротко.",
-                extra_hints=hints,
-            )
+            # Клиент молчит, входящего нет. Что писать - решает бот на Poe по истории.
+            reply, classification = await self.dialog.build_reply(history, FOLLOWUP_TRIGGER)
             async with self._chat_lock(chat_id):
                 if not await self._live_still_ours(chat_id):
                     continue
