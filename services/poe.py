@@ -123,5 +123,8 @@ async def generate_reply(
     raw = await poe_chat(SETTINGS.poe_response_bot, msgs, temperature=0.7, max_tokens=600)
     reply, need_manager = _sanitize_reply(raw)
     if already_started:
-        reply = strip_greeting(reply)
+        without_greeting = strip_greeting(reply)
+        if without_greeting != reply:
+            logger.info("Срезал приветствие: бот в этом чате уже писал (%s в истории)", len(history))
+            reply = without_greeting
     return reply, need_manager
