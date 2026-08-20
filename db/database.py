@@ -150,7 +150,8 @@ class Database:
         }
         if role == "user":
             patch["last_user_msg_at"] = _utc_now()
-            patch["followup_stage"] = 0
+            # followup_stage не сбрасываем: дожим один на чат за всё время.
+            # Иначе клиент, который отвечает и снова замолкает, получал бы их пачкой.
         self.update(chat_id, **patch)
 
     def state(self, chat_id: str) -> dict[str, Any]:
