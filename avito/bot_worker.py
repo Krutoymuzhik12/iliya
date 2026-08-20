@@ -15,6 +15,7 @@ from config.settings import SETTINGS, AppSettings
 from db.database import Database
 from services.dialog_service import DialogService
 from services.leads import booked_from_history, phones_from_history, transcript
+from services.names import address_hint
 from services.quiet_hours import QuietHours
 from services.telegram_leads import TelegramLeads
 
@@ -87,8 +88,14 @@ class AvitoBot:
         hints = []
         if dialog.get("item_title"):
             hints.append(f"клиент пишет по объявлению «{dialog['item_title']}»")
-        if dialog.get("client_name"):
-            hints.append(f"в профиле клиент «{dialog['client_name']}»")
+        name_hint = address_hint(dialog.get("client_name"))
+        if name_hint:
+            hints.append(name_hint)
+        elif dialog.get("client_name"):
+            hints.append(
+                f"в профиле «{dialog['client_name']}» - непонятно, имя это или нет. "
+                "Спрашивай имя не больше одного раза за диалог"
+            )
         return hints
 
     def _lead_text(self, chat_id: str, phones: list[str], booked: bool) -> str:
