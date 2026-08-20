@@ -23,8 +23,18 @@ logger = logging.getLogger(__name__)
 STOP_CMD_RE = re.compile(r"^\s*#\s*(стоп|stop)\b", re.I)
 START_CMD_RE = re.compile(r"^\s*#\s*(старт|start)\b", re.I)
 
-VOICE_HINT = "Напишите, пожалуйста, текстом - голосовые пока разберу чуть позже."
-UNSUPPORTED_HINT = "Напишите, пожалуйста, текстом - так отвечу быстрее."
+# Сообщение без текста (фото, голосовое, вложение) кладём в диалог как факт.
+# Своих текстов клиенту код не пишет: отвечает бот на Poe.
+NON_TEXT_MARKERS = {
+    "voice": "[клиент прислал голосовое сообщение]",
+    "image": "[клиент прислал фото]",
+    "file": "[клиент прислал файл]",
+    "link": "[клиент прислал ссылку]",
+    "location": "[клиент прислал геолокацию]",
+    "item": "[клиент прислал другое объявление]",
+    "call": "[клиент звонил по объявлению]",
+}
+NON_TEXT_DEFAULT = "[клиент прислал вложение без текста]"
 
 # Дожим - единственное место, где входящего нет и в Poe нужен хоть какой-то запрос.
 FOLLOWUP_TRIGGER = "Клиент молчит несколько часов. Напомни о себе."
@@ -321,17 +331,18 @@ class AvitoBot:
             chat_id, last_msg_ts=max(int(m.get("created") or 0) for m in incoming)
         )
 
+        parts: list[str] = []
         for m in incoming:
-            kind = m.get("type")
             text = message_text(m)
-            if kind == "text" and text:
-                await self._batcher.enqueue(chat_id, text)
-            elif kind == "voice":
-                await self._say(chat_id, VOICE_HINT)
-            elif text:
-                await self._batcher.enqueue(chat_id, text)
-            else:
-                await self._say(chat_id, UNSUPPORTED_HINT)
+            if text:
+                parts.append(text)
+                continue
+            marker = NON_TEXT_MARKERS.get(str(m.get("type") or ""), NON_TEXT_DEFAULT)
+            # Пять фото подряд - одна пометка, а не пять одинаковых строк.
+            if marker not in parts:
+                parts.append(marker)
+        for part in parts:
+            await self._batcher.enqueue(chat_id, part)
 
     async def _baseline_existing_chats(self) -> None:
         chats = await self.api.chats(self._user_id, unread_only=False, limit=100)
