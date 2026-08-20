@@ -29,6 +29,16 @@ class StripGreetingTests(unittest.TestCase):
         text = "Приветствую вас на связи Илья"
         self.assertEqual(strip_greeting(text), text)
 
+    def test_repeated_greeting_forms(self) -> None:
+        self.assertEqual(
+            strip_greeting("Здравствуйте ещё раз! замерщик наберёт."),
+            "Замерщик наберёт.",
+        )
+        self.assertEqual(
+            strip_greeting("И вам здравствуйте! по цене договоримся."),
+            "По цене договоримся.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
