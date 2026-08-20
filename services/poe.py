@@ -105,13 +105,21 @@ def strip_greeting(text: str) -> str:
     return cut[0].upper() + cut[1:]
 
 
-async def generate_reply(history: list[dict], user_msg: str) -> tuple[str, bool]:
-    """В Poe уходит только история чата и сообщение клиента, без служебных вставок."""
+async def generate_reply(
+    history: list[dict],
+    user_msg: str,
+    *,
+    context: list[str] | None = None,
+) -> tuple[str, bool]:
+    """В Poe уходит история чата и факты о чате. Как отвечать - решает бот на Poe."""
     msgs = _maybe_system()
     for m in _last_history(history):
         msgs.append({"role": m["role"], "content": m["content"]})
     already_started = any(m.get("role") == "assistant" for m in history)
-    msgs.append({"role": "user", "content": user_msg})
+    content = user_msg
+    if context:
+        content = f"{user_msg}\n\n(служебное, клиент этого не писал: {'; '.join(context)})"
+    msgs.append({"role": "user", "content": content})
     raw = await poe_chat(SETTINGS.poe_response_bot, msgs, temperature=0.7, max_tokens=600)
     reply, need_manager = _sanitize_reply(raw)
     if already_started:

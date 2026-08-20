@@ -28,13 +28,17 @@ class DialogService:
         )
 
     async def build_reply(
-        self, history: list[dict], user_text: str
+        self,
+        history: list[dict],
+        user_text: str,
+        *,
+        context: list[str] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         if not self.settings.poe_ready():
             logger.warning("Poe не задан — ответ клиенту не генерируем")
             return "", {"need_manager": False}
         try:
-            reply, need_manager = await poe.generate_reply(history, user_text)
+            reply, need_manager = await poe.generate_reply(history, user_text, context=context)
         except Exception:
             logger.exception("Poe не ответил")
             return FALLBACK, {"need_manager": False}

@@ -119,6 +119,13 @@ class AvitoBot:
             self.db.set_state(chat_id, lead_sent=True)
             logger.info("Лид ушёл в Telegram chat=%s phones=%s booked=%s", chat_id, phones, booked)
 
+    @staticmethod
+    def _context(dialog: dict[str, Any]) -> list[str]:
+        """Только факты о чате. Инструкций, как отвечать, из кода не даём."""
+        if dialog.get("item_title"):
+            return [f"клиент пишет по объявлению «{dialog['item_title']}»"]
+        return []
+
     async def _flush_batch(self, chat_id: str, combined_text: str) -> None:
         async with self._chat_lock(chat_id):
             dialog = self.db.get(chat_id)
@@ -127,12 +134,15 @@ class AvitoBot:
                 return
             self.db.append_message(chat_id, "user", combined_text)
             history = self.db.history(chat_id)[:-1]
+            context = self._context(dialog)
         await self.dialog.delay_reply()
         if not await self._live_still_ours(chat_id):
             logger.info("flush отменён chat=%s — чат перехватили до генерации", chat_id)
             await self._maybe_send_lead(chat_id)
             return
-        reply, classification = await self.dialog.build_reply(history, combined_text)
+        reply, classification = await self.dialog.build_reply(
+            history, combined_text, context=context
+        )
         async with self._chat_lock(chat_id):
             if not await self._live_still_ours(chat_id):
                 logger.info("flush отменён chat=%s — чат перехватили до отправки", chat_id)
@@ -403,7 +413,9 @@ class AvitoBot:
             if not bot_owns(dialog):
                 continue
             # Клиент молчит, входящего нет. Что писать - решает бот на Poe по истории.
-            reply, classification = await self.dialog.build_reply(history, FOLLOWUP_TRIGGER)
+            reply, classification = await self.dialog.build_reply(
+                history, FOLLOWUP_TRIGGER, context=self._context(dialog or {})
+            )
             async with self._chat_lock(chat_id):
                 if not await self._live_still_ours(chat_id):
                     continue
