@@ -113,6 +113,33 @@ class AvitoBot:
         status = self._apply_owner_messages(chat_id, messages)
         return status == BOT_OWNED
 
+    def _chat_url(self, chat_id: str) -> str:
+        try:
+            return self.settings.avito_chat_url_template.format(chat_id=chat_id)
+        except (KeyError, IndexError):
+            logger.warning("Кривой AVITO_CHAT_URL_TEMPLATE, отдаю голый id чата")
+            return chat_id
+
+    def _chat_links(self, chat: dict[str, Any]) -> dict[str, str]:
+        """Ссылки, которые Авито отдаёт сам: на объявление и на профиль клиента."""
+        links: dict[str, str] = {}
+        value = (chat.get("context") or {}).get("value") or {}
+        if value.get("url"):
+            links["item_url"] = str(value["url"])
+        for user in chat.get("users") or []:
+            if int(user.get("id") or 0) != self._user_id and user.get("url"):
+                links["client_url"] = str(user["url"])
+        return links
+
+    def _link_lines(self, chat_id: str) -> list[str]:
+        state = self.db.state(chat_id)
+        lines = [f"Чат: {self._chat_url(chat_id)}"]
+        if state.get("item_url"):
+            lines.append(f"Объявление на Авито: {state['item_url']}")
+        if state.get("client_url"):
+            lines.append(f"Профиль клиента: {state['client_url']}")
+        return lines
+
     def _lead_text(self, chat_id: str, phones: list[str], booked: bool) -> str:
         dialog = self.db.get(chat_id) or {}
         why = []
@@ -126,14 +153,16 @@ class AvitoBot:
             f"Профиль Авито: {dialog.get('client_name') or '—'}",
             f"Телефон: {', '.join(phones) or 'не оставил'}",
             f"Объявление: {dialog.get('item_title') or '—'}",
-            f"Чат: {chat_id}",
+            *self._link_lines(chat_id),
         ]
         notes = transcript(self.db.history(chat_id))
         if notes:
             lines.extend(["", "Конспект:", notes])
         return "\n".join(lines)[:4000]
 
-    def _attachment_text(self, chat_id: str, kinds: dict[str, int], stopped: bool) -> str:
+    def _attachment_text(
+        self, chat_id: str, kinds: dict[str, int], stopped: bool, replying: bool = False
+    ) -> str:
         dialog = self.db.get(chat_id) or {}
         what = ", ".join(
             NON_TEXT_NAMES.get(kind, kind or "вложение") + (f" x{count}" if count > 1 else "")
@@ -147,40 +176,76 @@ class AvitoBot:
         lines = [
             head,
             f"Что: {what}",
-            f"Объявление: {dialog.get('item_title') or '—'}",
             f"Профиль Авито: {dialog.get('client_name') or '—'}",
-            f"Чат: {chat_id}",
+            f"Объявление: {dialog.get('item_title') or '—'}",
+            *self._link_lines(chat_id),
         ]
         notes = transcript(self.db.history(chat_id))
         if notes:
             lines.extend(["", "Конспект:", notes])
-        if stopped:
-            lines.extend(["", "Ответьте клиенту в Авито. Вернуть бота — «#старт» в чат."])
+        if replying:
+            lines.extend(
+                [
+                    "",
+                    "Клиенту уходит ответ, что уточним и вернёмся. Дальше отвечайте вы.",
+                    "Вернуть бота в чат — «#старт».",
+                ]
+            )
+        elif stopped:
+            lines.extend(["", "Бот в этом чате и так молчал. Ответьте клиенту в Авито."])
         return "\n".join(lines)[:4000]
 
     async def _handoff_attachment(
         self, chat_id: str, messages: list[dict], texts: list[str] | None = None
     ) -> None:
-        """Бот замолкает и отдаёт чат менеджеру: вложение он всё равно не прочитает."""
-        for text in texts or []:
-            self.db.append_message(chat_id, "user", text)
+        """Клиенту - «уточню и вернусь», чат менеджеру, бот замолкает."""
         kinds: dict[str, int] = {}
+        markers: list[str] = []
         for m in messages:
             kind = str(m.get("type") or "")
             kinds[kind] = kinds.get(kind, 0) + 1
-            self.db.append_message(chat_id, "user", NON_TEXT_MARKERS.get(kind, NON_TEXT_DEFAULT))
+            marker = NON_TEXT_MARKERS.get(kind, NON_TEXT_DEFAULT)
+            # Пять фото подряд - одна пометка, а не пять одинаковых строк.
+            if marker not in markers:
+                markers.append(marker)
+        for text in texts or []:
+            self.db.append_message(chat_id, "user", text)
+        for marker in markers:
+            self.db.append_message(chat_id, "user", marker)
+
         stopped = not kinds.keys() <= INFO_ONLY_KINDS
-        if stopped and (self.db.get(chat_id) or {}).get("status") == BOT_OWNED:
-            self.db.set_status(chat_id, MANUAL)
-            await self._batcher.drop(chat_id)
-            logger.info("Чат %s: вложение %s — бот замолчал, чат менеджеру", chat_id, kinds)
-        sent = await self.tg.send(self._attachment_text(chat_id, kinds, stopped))
+        replying = stopped and (self.db.get(chat_id) or {}).get("status") == BOT_OWNED
+        sent = await self.tg.send(self._attachment_text(chat_id, kinds, stopped, replying))
         logger.info(
             "Вложение chat=%s %s, менеджеру в TG: %s", chat_id, kinds, "ушло" if sent else "не ушло"
         )
         for m in messages:
             await self._forward_attachment(chat_id, m)
+
+        if replying:
+            await self._batcher.drop(chat_id)
+            try:
+                await self._say_and_step_aside(chat_id, markers)
+            finally:
+                self.db.set_status(chat_id, MANUAL)
+                logger.info("Чат %s: вложение %s — бот замолчал, чат менеджеру", chat_id, kinds)
         await self._maybe_send_lead(chat_id)
+
+    async def _say_and_step_aside(self, chat_id: str, markers: list[str]) -> None:
+        """Текст «уточню у коллег» пишет Poe: своих реплик код клиенту не шлёт."""
+        if not markers:
+            return
+        dialog = self.db.get(chat_id) or {}
+        history = self.db.history(chat_id)
+        try:
+            reply, _ = await self.dialog.build_reply(
+                history[: -len(markers)], "\n".join(markers), context=self._context(dialog)
+            )
+        except Exception:
+            logger.exception("Poe не ответил на вложение chat=%s - клиент без ответа", chat_id)
+            return
+        if reply:
+            await self._say(chat_id, reply)
 
     async def _forward_attachment(self, chat_id: str, message: dict) -> None:
         """Само вложение — в группу, чтобы менеджер не лазил в Авито."""
@@ -190,7 +255,8 @@ class AvitoBot:
         url = await self._voice_url(message) if kind == "voice" else attachment_url(message)
         if not url:
             return
-        caption = f"{NON_TEXT_NAMES.get(kind, 'вложение')} из чата {chat_id}"
+        what = NON_TEXT_NAMES.get(kind, "вложение").capitalize()
+        caption = f"{what} от клиента\n{self._chat_url(chat_id)}"
         data = await self.api.download(url)
         if not data:
             # Ссылки Авито бывают короткоживущие — отдаём хотя бы её.
@@ -334,6 +400,12 @@ class AvitoBot:
             )
         return dialog
 
+    def _remember_links(self, chat_id: str, chat: dict[str, Any]) -> None:
+        state = self.db.state(chat_id)
+        patch = {k: v for k, v in self._chat_links(chat).items() if state.get(k) != v}
+        if patch:
+            self.db.set_state(chat_id, **patch)
+
     def _apply_owner_messages(self, chat_id: str, messages: list[dict]) -> str:
         state = self.db.state(chat_id)
         last_seen = int(state.get("last_owner_ts") or 0)
@@ -401,6 +473,7 @@ class AvitoBot:
         if dialog["status"] == NOT_OURS:
             return
 
+        self._remember_links(chat_id, chat)
         status = self._apply_owner_messages(chat_id, messages)
         if status != BOT_OWNED:
             incoming = self._incoming(messages, int(dialog.get("last_msg_ts") or 0))

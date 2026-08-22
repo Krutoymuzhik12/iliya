@@ -47,6 +47,7 @@ class AppSettings:
     tg_bot_token: str
     tg_lead_chat_id: int
     tg_test_mode: bool
+    avito_chat_url_template: str
     transcription_provider: str
     whisper_model: str
     openai_api_key: str
@@ -84,6 +85,10 @@ class AppSettings:
             tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
             tg_lead_chat_id=int(os.getenv("TG_LEAD_CHAT_ID", "0") or 0),
             tg_test_mode=_bool_env("TG_TEST_MODE"),
+            avito_chat_url_template=os.getenv(
+                "AVITO_CHAT_URL_TEMPLATE",
+                "https://www.avito.ru/profile/messenger/channel/{chat_id}",
+            ).strip(),
             transcription_provider=os.getenv("TRANSCRIPTION_PROVIDER", "auto").strip().lower(),
             whisper_model=os.getenv("WHISPER_MODEL", "small").strip(),
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
